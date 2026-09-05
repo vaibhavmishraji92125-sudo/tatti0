@@ -1,11 +1,39 @@
 # main.py
 
+import asyncio
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import math
+
+# --- 1. ASYNCIO PATCH (Fixes the Python 3.14 crash) ---
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+# ------------------------------------------------------
+
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from api import API_ID, API_HASH, BOT_TOKEN
 
-# Initialize the bot
+# --- 2. DUMMY WEB SERVER (Satisfies Render's Port binding requirement) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+        
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
+
+# Start the web server in a background thread
+threading.Thread(target=run_dummy_server, daemon=True).start()
+# -------------------------------------------------------------------------
+
+# --- 3. BOT LOGIC ---
 app = Client(
     "AdvancedCalcBot",
     api_id=API_ID,
@@ -13,20 +41,18 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# Safe execution environment for math calculations
 MATH_FUNCTIONS = {
     "sin": math.sin,
     "cos": math.cos,
     "tan": math.tan,
-    "log": math.log10,       # Base 10 Logarithm
-    "ln": math.log,          # Natural Logarithm
-    "fac": math.factorial,   # Factorial
+    "log": math.log10,       
+    "ln": math.log,          
+    "fac": math.factorial,   
     "pi": math.pi,
     "e": math.e,
 }
 
 def calc_keyboard():
-    """Generates the interactive Inline Keyboard UI for the calculator."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("sin(", callback_data="sin("), 
@@ -74,7 +100,6 @@ def calc_keyboard():
 
 @app.on_message(filters.command("start") | filters.command("calc"))
 def start_calc(client, message):
-    """Sends the calculator UI when the user starts the bot."""
     message.reply_text(
         "🧮 **Advanced Scientific Calculator**\n\n`0`",
         reply_markup=calc_keyboard()
@@ -82,10 +107,8 @@ def start_calc(client, message):
 
 @app.on_callback_query()
 def calculator_logic(client, callback_query: CallbackQuery):
-    """Handles button presses and performs calculations."""
     data = callback_query.data
     
-    # Extract the current math expression from the message text
     current_text = callback_query.message.text.split("\n\n")[-1].replace("`", "")
     
     if current_text in ["0", "Error"]:
@@ -97,33 +120,27 @@ def calculator_logic(client, callback_query: CallbackQuery):
         new_text = current_text[:-1] if len(current_text) > 1 else "0"
     elif data == "=":
         try:
-            # Evaluate the mathematical expression
             result = eval(current_text, {"__builtins__": {}}, MATH_FUNCTIONS)
-            
-            # Format the result to avoid overly long decimals
             if isinstance(result, float) and result.is_integer():
                 result = int(result)
             else:
                 result = round(result, 8)
-                
             new_text = str(result)
         except Exception:
             new_text = "Error"
     else:
         new_text = current_text + data
         
-    # Update the UI with the new text
     try:
         callback_query.message.edit_text(
             f"🧮 **Advanced Scientific Calculator**\n\n`{new_text}`",
             reply_markup=calc_keyboard()
         )
     except Exception:
-        # Ignore pyrogram's "MessageNotModified" error if the user clicks the same button rapidly
         pass 
         
     callback_query.answer()
 
 if __name__ == "__main__":
-    print("🤖 Bot is starting...")
+    print("🤖 Bot and dummy web server are starting...")
     app.run()
